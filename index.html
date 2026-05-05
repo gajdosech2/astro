@@ -55,11 +55,27 @@
     <div class="action-row">
       <button id="process" class="primary" disabled>Process</button>
       <button id="download" class="primary" disabled>Download PNG</button>
-      <button id="reset" class="ghost">Reset</button>
     </div>
     <div id="progress-row" class="progress">
       <div class="progress-track"><div id="progress-bar"></div></div>
       <span id="progress-label">idle</span>
+    </div>
+  </section>
+
+  <section class="card preset-card">
+    <div class="preset-head">
+      <h3>Preset</h3>
+      <button id="reset" class="link-btn" title="Re-apply the active preset">Reset</button>
+    </div>
+    <div class="preset-row">
+      <button class="preset-btn active" data-preset="dark">
+        <span class="preset-name">Dark</span>
+        <span class="preset-desc">Short exposure · high ISO · clear eyepiece circle</span>
+      </button>
+      <button class="preset-btn" data-preset="stacked">
+        <span class="preset-name">Stacked</span>
+        <span class="preset-desc">Longer / stacked exposure · brighter background</span>
+      </button>
     </div>
   </section>
 
@@ -106,13 +122,13 @@
       <div class="slider" data-key="minBlob">
         <div class="slider-head">
           <label for="minBlob">Min blob size</label>
-          <div class="slider-chip">
+          <div class="slider-chip" title="When the AUTO badge is on, this field tracks 15 ÷ downsample. Drag the slider or type a value to override; the badge will turn off.">
             <input type="number" id="minBlob-num" inputmode="numeric" min="1" max="100" step="1">
             <span class="suffix">px</span>
           </div>
         </div>
         <input type="range" id="minBlob">
-        <p class="muted">Primary noise filter. Real stars ≥ 15 px, noise spikes &lt; 10 px. Auto-halves with downsample factor (default 7 at 2×).</p>
+        <p class="muted">Primary noise filter. Real stars ≥ 15 px, noise spikes &lt; 10 px. The <strong>AUTO</strong> badge means the value is derived from downsample (15 ÷ N); change the value to take manual control.</p>
       </div>
 
       <div class="slider" data-key="maxBlob">

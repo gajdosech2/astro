@@ -48,7 +48,10 @@ function run(rgba, w, h, p) {
   const cropped = autoCropToField(r, g, b, w, h);
   r = cropped.r; g = cropped.g; b = cropped.b;
   w = cropped.w; h = cropped.h;
-  log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (radius ${cropped.radius}px)`);
+  const fieldRadius = cropped.radius;
+  const fieldCx     = cropped.cx;
+  const fieldCy     = cropped.cy;
+  log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (radius ${fieldRadius}px)`);
 
   // ── Compute luminance ────────────────────────────────────────────────
   const lum = new Float32Array(w * h);
@@ -67,6 +70,28 @@ function run(rgba, w, h, p) {
   const cleaned = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
     cleaned[i] = Math.max(0, Math.min(255, lum[i] - bg[i]));
+  }
+
+  // The median filter near the circle boundary averages bright field pixels
+  // with the zeroed exterior, pulling the background estimate down and
+  // creating a false-detection ring just inside the rim. Erode the valid
+  // detection region by bg-kernel pixels to suppress that halo.
+  if (fieldRadius > 0) {
+    const safeRadius = Math.max(1, fieldRadius - p.bgKernel);
+    const r2 = safeRadius * safeRadius;
+    let zeroed = 0;
+    for (let y = 0; y < h; y++) {
+      const dy = y - fieldCy;
+      const dy2 = dy * dy;
+      for (let x = 0; x < w; x++) {
+        const dx = x - fieldCx;
+        if (dx * dx + dy2 > r2) {
+          if (cleaned[y * w + x] > 0) zeroed++;
+          cleaned[y * w + x] = 0;
+        }
+      }
+    }
+    log(`[edge]   Suppressed ${zeroed} px in boundary annulus (safe r=${safeRadius}, margin=${p.bgKernel}px)`);
   }
 
   // ── Detect & filter blobs ────────────────────────────────────────────
@@ -127,7 +152,7 @@ function autoCropToField(r, g, b, w, h) {
   if (rmax < 0) {
     // No bright pixels — return as-is
     log('[crop]   WARNING: no bright field detected, skipping crop');
-    return { r, g, b, w, h, origW: w, origH: h, radius: 0 };
+    return { r, g, b, w, h, origW: w, origH: h, radius: 0, cx: w / 2, cy: h / 2 };
   }
 
   const rc = (rmin + rmax) >> 1;
@@ -163,7 +188,11 @@ function autoCropToField(r, g, b, w, h) {
     }
   }
 
-  return { r: nr, g: ng, b: nb, w: newW, h: newH, origW: w, origH: h, radius };
+  // Centre in cropped coordinates (r0, c0 may differ from rc-radius if
+  // the inscribed circle extends past the original image edges).
+  const newCy = rc - r0;
+  const newCx = cc - c0;
+  return { r: nr, g: ng, b: nb, w: newW, h: newH, origW: w, origH: h, radius, cx: newCx, cy: newCy };
 }
 
 /* ─────────────────────────────────────────────────────────────────────
