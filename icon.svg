@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#1f3066"/>
+      <stop offset="55%" stop-color="#0c1224"/>
+      <stop offset="100%" stop-color="#05070d"/>
+    </radialGradient>
+    <radialGradient id="field" cx="50%" cy="55%" r="55%">
+      <stop offset="0%"  stop-color="#3a4a78" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#1a2547" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#0a0f1f" stop-opacity="0.9"/>
+    </radialGradient>
+    <radialGradient id="star" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#ffffff"/>
+      <stop offset="40%" stop-color="#f3f6ff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#cad3ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bigstar" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#ffffff"/>
+      <stop offset="20%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="60%" stop-color="#9ec3ff" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#6ea8ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#bg)"/>
+
+  <!-- Eyepiece field -->
+  <circle cx="256" cy="270" r="200" fill="url(#field)"/>
+
+  <!-- Field rim (subtle ring) -->
+  <circle cx="256" cy="270" r="200" fill="none" stroke="#324470" stroke-width="3" opacity="0.6"/>
+
+  <!-- Star field -->
+  <g>
+    <!-- Big anchor star with cross diffraction spikes -->
+    <g transform="translate(206 320)">
+      <circle r="34" fill="url(#bigstar)"/>
+      <g stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.85">
+        <line x1="-46" y1="0" x2="46" y2="0"/>
+        <line x1="0" y1="-46" x2="0" y2="46"/>
+      </g>
+    </g>
+
+    <!-- Many smaller stars scattered inside the circle -->
+    <circle cx="290" cy="170" r="6"  fill="url(#star)"/>
+    <circle cx="334" cy="220" r="4"  fill="url(#star)"/>
+    <circle cx="364" cy="290" r="5"  fill="url(#star)"/>
+    <circle cx="316" cy="350" r="3"  fill="url(#star)"/>
+    <circle cx="252" cy="200" r="3"  fill="url(#star)"/>
+    <circle cx="186" cy="232" r="4"  fill="url(#star)"/>
+    <circle cx="148" cy="290" r="3"  fill="url(#star)"/>
+    <circle cx="172" cy="368" r="4"  fill="url(#star)"/>
+    <circle cx="246" cy="396" r="5"  fill="url(#star)"/>
+    <circle cx="312" cy="406" r="3"  fill="url(#star)"/>
+    <circle cx="380" cy="358" r="3"  fill="url(#star)"/>
+    <circle cx="222" cy="260" r="2"  fill="url(#star)"/>
+    <circle cx="290" cy="248" r="2"  fill="url(#star)"/>
+    <circle cx="348" cy="178" r="2"  fill="url(#star)"/>
+    <circle cx="124" cy="360" r="2"  fill="url(#star)"/>
+    <circle cx="396" cy="226" r="2"  fill="url(#star)"/>
+    <circle cx="262" cy="138" r="2"  fill="url(#star)"/>
+  </g>
+</svg>

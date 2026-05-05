@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Platesolve">
+<meta name="description" content="Clean up afocal phone astrophotos for Nova Astrometry plate solving — runs entirely in your browser.">
+
+<title>Astro Platesolve · Preprocessor</title>
+
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <img src="icon.svg" alt="" width="32" height="32">
+    <div>
+      <h1>Astro Platesolve</h1>
+      <p>Preprocessor for <a href="https://nova.astrometry.net" target="_blank" rel="noopener">nova.astrometry.net</a></p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <section class="card upload">
+    <input type="file" id="file" accept="image/*" capture="environment" hidden>
+    <div class="upload-row">
+      <button id="choose" class="primary">Choose photo</button>
+      <button id="sample" class="ghost">Use sample</button>
+    </div>
+    <p class="hint">Pick or capture a photo from your phone gallery. JPEG, PNG, HEIC supported.</p>
+  </section>
+
+  <section class="card previews">
+    <div class="preview">
+      <h3>Original</h3>
+      <canvas id="preview-original"></canvas>
+    </div>
+    <div class="preview">
+      <h3>Output</h3>
+      <canvas id="preview-output"></canvas>
+    </div>
+  </section>
+
+  <section class="card actions">
+    <div class="action-row">
+      <button id="process" class="primary" disabled>Process</button>
+      <button id="download" class="primary" disabled>Download PNG</button>
+      <button id="reset" class="ghost">Reset</button>
+    </div>
+    <div id="progress-row" class="progress">
+      <div class="progress-track"><div id="progress-bar"></div></div>
+      <span id="progress-label">idle</span>
+    </div>
+  </section>
+
+  <section class="card params">
+    <details open>
+      <summary>Parameters</summary>
+
+      <div class="slider" data-key="downsample">
+        <div class="slider-head">
+          <label for="downsample">Downsample</label>
+          <div class="slider-chip">
+            <input type="number" id="downsample-num" inputmode="numeric" min="1" max="4" step="1">
+            <span class="suffix">×</span>
+          </div>
+        </div>
+        <input type="range" id="downsample">
+        <p class="muted">Process at 1/N resolution. Higher = faster, lower memory. Default 2× is good for 12 MP iPhone shots.</p>
+      </div>
+
+      <div class="slider" data-key="bgKernel">
+        <div class="slider-head">
+          <label for="bgKernel">Background kernel</label>
+          <div class="slider-chip">
+            <input type="number" id="bgKernel-num" inputmode="numeric" min="3" max="51" step="2">
+            <span class="suffix">px</span>
+          </div>
+        </div>
+        <input type="range" id="bgKernel">
+        <p class="muted">Median filter radius for sky-glow estimation. Default 15. Raise to 25 px for bright/uneven backgrounds.</p>
+      </div>
+
+      <div class="slider" data-key="threshold">
+        <div class="slider-head">
+          <label for="threshold">Detection threshold</label>
+          <div class="slider-chip">
+            <input type="number" id="threshold-num" inputmode="numeric" min="1" max="50" step="1">
+            <span class="suffix">DN</span>
+          </div>
+        </div>
+        <input type="range" id="threshold">
+        <p class="muted">DN above local background to enter detection. Default 10. Keep low — size filter does the noise rejection.</p>
+      </div>
+
+      <div class="slider" data-key="minBlob">
+        <div class="slider-head">
+          <label for="minBlob">Min blob size</label>
+          <div class="slider-chip">
+            <input type="number" id="minBlob-num" inputmode="numeric" min="1" max="100" step="1">
+            <span class="suffix">px</span>
+          </div>
+        </div>
+        <input type="range" id="minBlob">
+        <p class="muted">Primary noise filter. Real stars ≥ 15 px, noise spikes &lt; 10 px. Auto-halves with downsample factor (default 7 at 2×).</p>
+      </div>
+
+      <div class="slider" data-key="maxBlob">
+        <div class="slider-head">
+          <label for="maxBlob">Max blob size</label>
+          <div class="slider-chip">
+            <input type="number" id="maxBlob-num" inputmode="numeric" min="50" max="5000" step="50">
+            <span class="suffix">px</span>
+          </div>
+        </div>
+        <input type="range" id="maxBlob">
+        <p class="muted">Discard very large blobs (clouds, the moon, lens-flare). Default 2000 — generous, since bright stars can be large.</p>
+      </div>
+
+      <div class="slider" data-key="maxCompact">
+        <div class="slider-head">
+          <label for="maxCompact">Max compactness</label>
+          <div class="slider-chip">
+            <input type="number" id="maxCompact-num" inputmode="decimal" min="0.5" max="10" step="0.1">
+          </div>
+        </div>
+        <input type="range" id="maxCompact">
+        <p class="muted">peak/area ratio. Real stars ≤ 2.2, noise spikes ≥ 9. Default 3.0 has a clean gap for iPhone afocal shots.</p>
+      </div>
+
+      <div class="slider" data-key="colorCV">
+        <div class="slider-head">
+          <label for="colorCV">Max colour CV</label>
+          <div class="slider-chip">
+            <input type="number" id="colorCV-num" inputmode="decimal" min="0" max="1" step="0.05">
+          </div>
+        </div>
+        <input type="range" id="colorCV">
+        <p class="muted">RGB coefficient of variation. Stars are neutral white; ISO noise is coloured. Default 0.5. Set to 1.0 to disable.</p>
+      </div>
+
+      <div class="slider" data-key="glowSigma">
+        <div class="slider-head">
+          <label for="glowSigma">Glow σ</label>
+          <div class="slider-chip">
+            <input type="number" id="glowSigma-num" inputmode="decimal" min="0" max="5" step="0.1">
+          </div>
+        </div>
+        <input type="range" id="glowSigma">
+        <p class="muted">Gaussian profile sigma for accepted stars. Default 1.5 — smooths centroids for the source extractor. Set to 0 to disable.</p>
+      </div>
+
+      <div class="slider" data-key="stretch">
+        <div class="slider-head">
+          <label for="stretch">Stretch</label>
+          <div class="slider-chip">
+            <input type="number" id="stretch-num" inputmode="decimal" min="0.5" max="10" step="0.1">
+            <span class="suffix">×</span>
+          </div>
+        </div>
+        <input type="range" id="stretch">
+        <p class="muted">Brightness multiplier after normalisation. Default 3.0 — keeps faint stars visible without saturating the bright ones.</p>
+      </div>
+
+      <div class="slider" data-key="bgLift">
+        <div class="slider-head">
+          <label for="bgLift">Background lift</label>
+          <div class="slider-chip">
+            <input type="number" id="bgLift-num" inputmode="numeric" min="0" max="50" step="1">
+            <span class="suffix">DN</span>
+          </div>
+        </div>
+        <input type="range" id="bgLift">
+        <p class="muted">Output background grey level. Default 12 — small lift helps astrometry's source extractor pick its detection threshold.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="card log-card">
+    <details id="log-details">
+      <summary>Log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+  <footer>
+    <p>All processing runs locally in your browser — your photos never leave your device.</p>
+  </footer>
+
+</main>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
