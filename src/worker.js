@@ -43,15 +43,25 @@ function run(rgba, w, h, p) {
     b[j] = rgba[i + 2];
   }
 
-  // ── Crop to circular eyepiece field (always on) ──────────────────────
-  progress('crop', 0);
-  const cropped = autoCropToField(r, g, b, w, h);
-  r = cropped.r; g = cropped.g; b = cropped.b;
-  w = cropped.w; h = cropped.h;
-  const fieldRadius = cropped.radius;
-  const fieldCx     = cropped.cx;
-  const fieldCy     = cropped.cy;
-  log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (radius ${fieldRadius}px)`);
+  // ── Crop to circular eyepiece field (optional, default on) ───────────
+  // When disabled, fieldRadius stays 0 and the downstream blob-level halo
+  // filter becomes a no-op — the median filter sees no synthetic exterior
+  // discontinuity, so no halo is generated either.
+  let fieldRadius = 0;
+  let fieldCx     = w / 2;
+  let fieldCy     = h / 2;
+  if (p.crop) {
+    progress('crop', 0);
+    const cropped = autoCropToField(r, g, b, w, h);
+    r = cropped.r; g = cropped.g; b = cropped.b;
+    w = cropped.w; h = cropped.h;
+    fieldRadius = cropped.radius;
+    fieldCx     = cropped.cx;
+    fieldCy     = cropped.cy;
+    log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (radius ${fieldRadius}px)`);
+  } else {
+    log(`[crop]   skipped — circular crop disabled, processing full frame`);
+  }
 
   // ── Compute luminance ────────────────────────────────────────────────
   const lum = new Float32Array(w * h);
@@ -72,31 +82,26 @@ function run(rgba, w, h, p) {
     cleaned[i] = Math.max(0, Math.min(255, lum[i] - bg[i]));
   }
 
-  // The median filter near the circle boundary averages bright field pixels
-  // with the zeroed exterior, pulling the background estimate down and
-  // creating a false-detection ring just inside the rim. Erode the valid
-  // detection region by bg-kernel pixels to suppress that halo.
+  // Make sure any pixel that might have leaked outside the field circle
+  // during the median filter is zeroed (the median window straddling the
+  // exterior would have produced a non-zero cleaned value otherwise).
+  // The actual halo *inside* the rim is rejected at the blob level in
+  // extractStars — see "boundary halo" filter there.
   if (fieldRadius > 0) {
-    const safeRadius = Math.max(1, fieldRadius - p.bgKernel);
-    const r2 = safeRadius * safeRadius;
-    let zeroed = 0;
+    const rField2 = fieldRadius * fieldRadius;
     for (let y = 0; y < h; y++) {
       const dy = y - fieldCy;
       const dy2 = dy * dy;
       for (let x = 0; x < w; x++) {
         const dx = x - fieldCx;
-        if (dx * dx + dy2 > r2) {
-          if (cleaned[y * w + x] > 0) zeroed++;
-          cleaned[y * w + x] = 0;
-        }
+        if (dx * dx + dy2 > rField2) cleaned[y * w + x] = 0;
       }
     }
-    log(`[edge]   Suppressed ${zeroed} px in boundary annulus (safe r=${safeRadius}, margin=${p.bgKernel}px)`);
   }
 
   // ── Detect & filter blobs ────────────────────────────────────────────
   progress('detect', 0);
-  const mask = extractStars(cleaned, r, g, b, w, h, p);
+  const mask = extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius);
 
   // ── Render output ────────────────────────────────────────────────────
   progress('render', 0);
@@ -374,7 +379,7 @@ function labelComponents(binary, w, h) {
  * Detect star blobs and apply size / compactness / colour filters.
  * Returns a Uint8Array mask (1 = accepted star pixel).
  * ──────────────────────────────────────────────────────────────────── */
-function extractStars(cleaned, r, g, b, w, h, p) {
+function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) {
   const N = w * h;
   const binary = new Uint8Array(N);
   for (let i = 0; i < N; i++) binary[i] = cleaned[i] > p.threshold ? 1 : 0;
@@ -384,23 +389,42 @@ function extractStars(cleaned, r, g, b, w, h, p) {
 
   const sizes = new Int32Array(count + 1);
   const peaks = new Float32Array(count + 1);
-  const sumR = new Float32Array(count + 1);
-  const sumG = new Float32Array(count + 1);
-  const sumB = new Float32Array(count + 1);
+  const sumR  = new Float32Array(count + 1);
+  const sumG  = new Float32Array(count + 1);
+  const sumB  = new Float32Array(count + 1);
+  const sumX  = new Float32Array(count + 1);
+  const sumY  = new Float32Array(count + 1);
 
-  for (let i = 0; i < N; i++) {
-    const lbl = labels[i];
-    if (!lbl) continue;
-    sizes[lbl]++;
-    if (cleaned[i] > peaks[lbl]) peaks[lbl] = cleaned[i];
-    sumR[lbl] += r[i];
-    sumG[lbl] += g[i];
-    sumB[lbl] += b[i];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const lbl = labels[i];
+      if (!lbl) continue;
+      sizes[lbl]++;
+      if (cleaned[i] > peaks[lbl]) peaks[lbl] = cleaned[i];
+      sumR[lbl] += r[i];
+      sumG[lbl] += g[i];
+      sumB[lbl] += b[i];
+      sumX[lbl] += x;
+      sumY[lbl] += y;
+    }
   }
+
+  // Boundary halo (only meaningful when crop is on, i.e. fieldRadius > 0):
+  // blobs whose centroid lies in the median-bias annulus and whose peak is
+  // too low to be a real star are halo. The halo bias can reach ~50% of
+  // local field brightness when the median window is half outside the
+  // circle. Real rim stars in our samples sit at peaks ≥ 80 DN, so a
+  // 5×-threshold cutoff catches the worst halo while leaving real bright
+  // stars untouched.
+  const haloMargin = Math.ceil(p.bgKernel / 2);
+  const safeRadius = fieldRadius > 0 ? Math.max(1, fieldRadius - haloMargin) : 0;
+  const safeR2     = safeRadius * safeRadius;
+  const haloMax    = 5 * p.threshold;
 
   // Accept/reject per blob
   const accept = new Uint8Array(count + 1);
-  let nSize = 0, nCompact = 0, nColor = 0, nKept = 0;
+  let nSize = 0, nCompact = 0, nColor = 0, nHalo = 0, nKept = 0;
   for (let lbl = 1; lbl <= count; lbl++) {
     const sz = sizes[lbl];
     if (sz < p.minBlob || sz > p.maxBlob) { nSize++; continue; }
@@ -417,6 +441,15 @@ function extractStars(cleaned, r, g, b, w, h, p) {
     const cv = Math.sqrt(variance) / meanRgb;
     if (cv > p.colorCV) { nColor++; continue; }
 
+    if (fieldRadius > 0) {
+      const dx = sumX[lbl] / sz - fieldCx;
+      const dy = sumY[lbl] / sz - fieldCy;
+      if (dx * dx + dy * dy > safeR2 && peaks[lbl] < haloMax) {
+        nHalo++;
+        continue;
+      }
+    }
+
     accept[lbl] = 1;
     nKept++;
   }
@@ -424,6 +457,7 @@ function extractStars(cleaned, r, g, b, w, h, p) {
   log(`[filter] Rejected by size        (<${p.minBlob} or >${p.maxBlob} px): ${nSize}`);
   log(`[filter] Rejected by compactness (peak/size > ${p.maxCompact}):    ${nCompact}`);
   log(`[filter] Rejected by colour      (CV > ${p.colorCV}):              ${nColor}`);
+  log(`[filter] Rejected by halo        (rim, peak < ${haloMax} DN):      ${nHalo}`);
   log(`[result] Stars accepted: ${nKept}`);
   if (nKept < 10) log(`[warn]   Only ${nKept} stars — try lowering threshold or min-blob.`);
   if (nKept > 200) log(`[warn]   ${nKept} stars — may still be noisy, try raising threshold or min-blob.`);

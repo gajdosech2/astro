@@ -9,7 +9,9 @@ const $ = (sel) => document.querySelector(sel);
 // derives from the correct value when applyPreset() runs the iteration.
 const PRESETS = {
   dark: {
-    // Short exposure, high ISO, clear eyepiece circle (Python script defaults).
+    // Short exposure, high ISO, dark background (Python script defaults).
+    // The smaller bg-kernel is enough since the background is nearly uniform.
+    crop:       1,
     downsample: 1,
     bgKernel:   15,
     threshold:  10,
@@ -25,6 +27,7 @@ const PRESETS = {
     // Long / stacked exposure, brighter background (sky glow fills corners).
     // Larger bg kernel handles uneven background; downsample 2× since the
     // median filter is the slow step.
+    crop:       1,
     downsample: 2,
     bgKernel:   25,
     threshold:  10,
@@ -42,6 +45,7 @@ const DEFAULT_PRESET = 'dark';
 
 // Slider definitions: id (also param key), bounds, step, decimal display.
 const SLIDERS = [
+  { id: 'crop',       min: 0,   max: 1,    step: 1,    digits: 0 },
   { id: 'downsample', min: 1,   max: 4,    step: 1,    digits: 0 },
   { id: 'bgKernel',   min: 3,   max: 51,   step: 2,    digits: 0 },
   { id: 'threshold',  min: 1,   max: 50,   step: 1,    digits: 0 },
@@ -134,6 +138,7 @@ function refreshAutoMinBlob() {
 
 function readParams() {
   return {
+    crop:       parseInt($('#crop').value, 10),
     downsample: parseInt($('#downsample').value, 10),
     bgKernel:   parseInt($('#bgKernel').value, 10),
     threshold:  parseFloat($('#threshold').value),

@@ -19,11 +19,13 @@ Usage:
     python astro_preprocess.py my_image.jpg --preset stacked
     python astro_preprocess.py my_image.jpg --bg-kernel 25 --min-blob 8
 
-The eyepiece field is always cropped to its inscribed square — there is
-no longer a `--no-crop` flag. After cropping, a boundary annulus of width
-`bg_kernel` pixels is suppressed in the cleaned image to remove the
-median-filter halo that otherwise appears at the rim on bright-background
-exposures.
+The eyepiece field is cropped to its inscribed square by default. Pass
+`--crop 0` (or `crop=False` to `process()`) to skip cropping and process
+the full frame as-is — useful when the field circle is partially out of
+view or auto-detection misbehaves on a particular image. When cropping is
+enabled, a blob-level halo filter rejects low-amplitude false detections
+in the median-filter halo annulus just inside the rim while preserving
+real bright rim stars.
 
 Requirements:
     pip install pillow numpy scipy
@@ -82,13 +84,14 @@ DEFAULT_BG_LIFT     = 12    # Background grey level in output image (0 = pure bl
 
 # ── Named presets ─────────────────────────────────────────────────────────────
 # Use with --preset <name>. Individual flags override preset values.
-# Note: cropping is always on. The two presets only differ in downsample
-# factor and median kernel size.
+# Note: cropping is on by default for both presets but can be overridden
+# with --crop 0. The two presets only differ in downsample factor and
+# median kernel size.
 
 PRESETS = {
     "dark": {
-        # Short exposure (~1/3 s), high ISO. Dark background, clear eyepiece
-        # circle. Noise is small and compact.
+        # Short exposure (~1/3 s), high ISO. Dark background, mostly uniform.
+        # The smaller bg-kernel is enough; downsample is unnecessary.
         "downsample":  1,
         "bg_kernel":   15,
         "threshold":   10,
@@ -118,8 +121,8 @@ def auto_crop_to_field(data: np.ndarray, field_threshold: float = 3.0,
     Detect the eyepiece circular field, apply a circular mask zeroing everything
     outside it, then crop to the circle bounding box.
 
-    Always runs (no --no-crop branch). The radius is shrunk by 3% to eliminate
-    boundary artifacts from the eyepiece field stop.
+    Called by process() only when crop=True. The radius is shrunk by 3% to
+    eliminate boundary artifacts from the eyepiece field stop.
 
     Returns (cropped_data, (cy, cx, radius)) where the centre coordinates are
     in the cropped frame and used downstream for boundary erosion.
@@ -165,29 +168,33 @@ def auto_crop_to_field(data: np.ndarray, field_threshold: float = 3.0,
 
 
 def subtract_background(lum: np.ndarray, kernel: int) -> np.ndarray:
-    """Estimate and subtract the local sky background via median filtering."""
-    bg = median_filter(lum, size=kernel)
+    """
+    Estimate and subtract the local sky background via median filtering.
+
+    `mode='nearest'` (clamp) matches the JS port's boundary handling. The
+    default 'reflect' would mirror bright field content across the image
+    edge, while 'nearest' replicates the actual edge row (which is mostly
+    zeroed exterior of the eyepiece circle). The downstream halo filter
+    is calibrated to the clamp behaviour, so use 'nearest' for both.
+    """
+    bg = median_filter(lum, size=kernel, mode='nearest')
     return np.clip(lum - bg, 0, 255)
 
 
-def suppress_boundary_halo(cleaned: np.ndarray, cy: int, cx: int,
-                            radius: int, margin: int) -> np.ndarray:
+def enforce_field_mask(cleaned: np.ndarray, cy: int, cx: int,
+                        radius: int) -> np.ndarray:
     """
-    The median filter near the circle boundary averages bright field pixels
-    with the zeroed exterior, pulling the background estimate down and
-    creating a false-detection ring just inside the rim. Erode the valid
-    region by `margin` (= bg_kernel) pixels to suppress that halo.
+    Make sure pixels outside the field circle stay at zero. The median
+    filter window straddling the exterior would otherwise leave non-zero
+    values just outside the rim. The actual halo *inside* the rim is
+    rejected at the blob level by extract_stars().
     """
     if radius <= 0:
         return cleaned
-    safe_radius = max(1, radius - margin)
-    h, w = cleaned.shape
+    h, w   = cleaned.shape
     yy, xx = np.ogrid[:h, :w]
-    safe_mask = (yy - cy)**2 + (xx - cx)**2 <= safe_radius**2
-    zeroed_count = int((cleaned > 0).sum() - (cleaned[safe_mask] > 0).sum())
-    out = np.where(safe_mask, cleaned, 0.0)
-    print(f"  [edge]   Suppressed {zeroed_count} px in boundary annulus "
-          f"(safe r={safe_radius}, margin={margin}px)")
+    field_mask = (yy - cy)**2 + (xx - cx)**2 <= radius**2
+    out = np.where(field_mask, cleaned, 0.0)
     return out
 
 
@@ -197,7 +204,11 @@ def extract_stars(cleaned:     np.ndarray,
                   min_blob:    int,
                   max_blob:    int,
                   max_compact: float,
-                  color_cv:    float) -> np.ndarray:
+                  color_cv:    float,
+                  field_cy:    int,
+                  field_cx:    int,
+                  field_radius: int,
+                  bg_kernel:   int) -> np.ndarray:
     """
     Detect and filter blobs. Returns a boolean mask of accepted star pixels.
 
@@ -206,14 +217,24 @@ def extract_stars(cleaned:     np.ndarray,
       2. Size         — primary noise rejection (noise <10 px, stars >=15 px)
       3. Compactness  — rejects unusually bright tiny spikes (peak / size)
       4. Colour       — rejects strongly coloured ISO noise speckles
+      5. Halo         — rejects low-amplitude blobs in the median-bias annulus
+                        just inside the field rim (real bright rim stars survive
+                        because their peak sits far above the halo level).
     """
     r, g, b = rgb
 
     binary         = cleaned > threshold
     labeled, n_all = label(binary)
 
-    n_size = n_compact = n_color = n_kept = 0
+    # Blob centroid is needed for the halo filter
+    halo_margin = (bg_kernel + 1) // 2
+    safe_radius = max(1, field_radius - halo_margin) if field_radius > 0 else 0
+    safe_r2     = safe_radius * safe_radius
+    halo_max    = 5 * threshold   # see worker.js — bias can reach ~50% of bright field
+
+    n_size = n_compact = n_color = n_halo = n_kept = 0
     mask = np.zeros_like(binary)
+    h, w = cleaned.shape
 
     for blob_id in range(1, n_all + 1):
         blob = labeled == blob_id
@@ -244,6 +265,16 @@ def extract_stars(cleaned:     np.ndarray,
             n_color += 1
             continue
 
+        # 4. Boundary-halo filter (only when we have a detected field circle)
+        if field_radius > 0:
+            ys, xs = np.where(blob)
+            cy_blob = float(ys.mean())
+            cx_blob = float(xs.mean())
+            d2 = (cy_blob - field_cy)**2 + (cx_blob - field_cx)**2
+            if d2 > safe_r2 and peak < halo_max:
+                n_halo += 1
+                continue
+
         mask |= blob
         n_kept += 1
 
@@ -252,6 +283,7 @@ def extract_stars(cleaned:     np.ndarray,
     print(f"  [filter] Rejected by size        (<{min_blob} or >{max_blob} px): {n_size}")
     print(f"  [filter] Rejected by compactness (peak/size > {max_compact}):    {n_compact}")
     print(f"  [filter] Rejected by colour      (CV > {color_cv}):              {n_color}")
+    print(f"  [filter] Rejected by halo        (rim, peak < {halo_max:g} DN):       {n_halo}")
     print(f"  [result] Stars accepted: {n_kept}")
 
     if n_kept < 10:
@@ -284,6 +316,7 @@ def render_output(cleaned:    np.ndarray,
 
 
 def process(input_path:   str,
+            crop:         bool  = True,    # circular crop to eyepiece field
             downsample:   int   = 1,
             bg_kernel:    int   = DEFAULT_BG_KERNEL,
             threshold:    float = DEFAULT_THRESHOLD,
@@ -321,8 +354,13 @@ def process(input_path:   str,
     if min_blob is None and downsample > 1:
         print(f"  [info]   min_blob auto-set to {effective_min_blob} (={DEFAULT_MIN_BLOB}/{downsample})")
 
-    # Crop to eyepiece field (always)
-    data, (cy, cx, radius) = auto_crop_to_field(data)
+    # Crop to eyepiece field (optional, default on)
+    if crop:
+        data, (cy, cx, radius) = auto_crop_to_field(data)
+    else:
+        h, w = data.shape[:2]
+        cy, cx, radius = h // 2, w // 2, 0   # radius=0 disables the halo filter
+        print(f"  [crop]  skipped — circular crop disabled, processing full frame")
 
     r, g, b = data[:,:,0], data[:,:,1], data[:,:,2]
     lum = 0.299*r + 0.587*g + 0.114*b
@@ -330,9 +368,10 @@ def process(input_path:   str,
 
     # Process
     cleaned = subtract_background(lum, bg_kernel)
-    cleaned = suppress_boundary_halo(cleaned, cy, cx, radius, bg_kernel)
+    cleaned = enforce_field_mask(cleaned, cy, cx, radius)
     mask    = extract_stars(cleaned, (r, g, b),
-                            threshold, effective_min_blob, max_blob, max_compact, color_cv)
+                            threshold, effective_min_blob, max_blob, max_compact, color_cv,
+                            cy, cx, radius, bg_kernel)
     final   = render_output(cleaned, mask, glow_sigma, stretch, bg_lift)
 
     _, n_est = label(final > 40)
@@ -362,6 +401,9 @@ Tuning tips:
         help="Parameter preset: 'dark' (short exposure, high ISO) or "
              "'stacked' (longer/stacked exposure, bright background). "
              "Individual flags override preset values.")
+    parser.add_argument("--crop", type=int, default=1, choices=[0, 1],
+        help="1 = detect the eyepiece field, mask to a circle and crop "
+             "(default). 0 = process the full frame as-is.")
     parser.add_argument("--downsample",   type=int,   default=1,
         help="Downsample factor before processing, e.g. 2 (default: 1). "
              "Use for bright backgrounds or large images that are slow to process. "
@@ -406,6 +448,7 @@ Tuning tips:
 
     process(
         args.input,
+        crop        = bool(args.crop),
         downsample  = pval("downsample",  args.downsample),
         bg_kernel   = pval("bg_kernel",   args.bg_kernel),
         threshold   = pval("threshold",   args.threshold),

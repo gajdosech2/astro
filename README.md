@@ -51,9 +51,11 @@ Resize the image by an integer factor (1×–4×). Halving each dimension brings
 
 When downsampling, `min_blob` is auto-halved (with a floor of 2 px) since blob sizes scale with linear resolution.
 
-### 3. Auto-crop to the eyepiece field (always on)
+### 3. Auto-crop to the eyepiece field (optional, default on)
 
-The eyepiece produces a bright circular field with dark exterior. We:
+Controlled by the `crop` parameter (`1` = on, `0` = off). When off, this stage is skipped entirely and the rest of the pipeline runs on the full downsampled frame.
+
+The eyepiece produces a bright circular field with dark exterior. When enabled, we:
 
 1. Compute luminance: `0.299·R + 0.587·G + 0.114·B`.
 2. Find the bounding box of pixels above a low brightness threshold (3.0).
@@ -63,6 +65,8 @@ The eyepiece produces a bright circular field with dark exterior. We:
 
 The center coordinates and radius are kept and used in stage 5.
 
+If you turn the crop off (slider value `0`, or `--crop 0` on the CLI), the pipeline still produces a usable result on both sample images — the area outside the eyepiece is mostly black, so it adds very little noise to the median estimate. Use this escape hatch when the field circle is partially out of view, when auto-detection misbehaves on a particular image, or when you want to keep the original framing.
+
 ### 4. Background subtraction
 
 The eyepiece field has a smooth bright background gradient (sky glow, vignetting). Estimate it with a 2D **median filter** of size `bg_kernel` (default 15 px, 25 px for stacked exposures), then subtract it from the luminance. The median filter is robust to point sources — a single bright star pixel doesn't shift the median of its 225-pixel neighbourhood.
@@ -71,9 +75,14 @@ The JS implementation uses **Huang's sliding-histogram median** (256-bin, per-ro
 
 ### 5. Boundary-halo suppression (the edge fix)
 
-Stage 3 zeroed the area outside the eyepiece circle. The median filter in stage 4 is therefore unbalanced near the rim: its window straddles bright field pixels and zero exterior pixels, pulling the background estimate *down*. After subtraction, a ring of width ≈ `bg_kernel` just inside the rim ends up artificially bright and would produce a halo of false detections.
+Stage 3 zeroed the area outside the eyepiece circle. The median filter in stage 4 is therefore unbalanced near the rim: its window straddles bright field pixels and zero exterior pixels, pulling the background estimate *down*. After subtraction, a band of width ≈ `bg_kernel/2` just inside the rim (the radius at which the median window stops straddling the boundary) ends up artificially bright and would produce a halo of false detections.
 
-The fix: build a smaller "safe" mask of radius `radius − bg_kernel` centered on the field, and zero the cleaned image outside it. Real stars in the rim annulus are lost, but those are usually distorted by the field stop anyway. This is the difference between the old `output2.png` reference (made with `--no-crop` to avoid the halo at the cost of including all the eyepiece junk) and the current always-crop pipeline.
+The fix happens at the **blob level**, after connected-component labeling — not by zeroing pixels in advance. We compute each blob's centroid and peak, and reject a blob if **both**:
+
+1. its centroid sits in the boundary annulus (`d > radius − bg_kernel/2` from the field centre), and
+2. its peak is below `5 × threshold` (the worst-case halo amplitude — about half the local field brightness).
+
+Real bright rim stars sit far above `5 × threshold` (typically 80–200 DN on input2's `~50 DN` field) and pass through untouched, even though their centroid is in the annulus. Halo arcs are large, dim, and never approach that peak, so they're rejected. This blob-level approach (rather than pre-zeroing pixels in the annulus) is what preserves the top- and bottom-most rim stars on the Stacked sample — pre-zeroing tended to fragment a star whose tail extended into the annulus and then rejected the leftover via `min_blob`.
 
 ### 6. Star detection & filtering
 
@@ -100,6 +109,7 @@ All parameters are exposed in the GUI as sliders **plus** an editable numeric fi
 
 | Parameter | Default | Range | What it does |
 |---|---|---|---|
+| `crop` | 1 | 0 / 1 | Detect the eyepiece field, mask to a circle and crop to the inscribed square. Turn off (`0`) if the circle is partially out of view or auto-detect misbehaves. |
 | `downsample` | 1× | 1–4× | Process at 1/N resolution. Higher = faster, lower memory. |
 | `bg_kernel` | 15 | 3–51 | Median filter size for background estimation. Use 25 for bright/uneven backgrounds. |
 | `threshold` | 10 | 1–50 | DN above local background to enter detection. Keep low; noise rejection is done by size. |
@@ -115,10 +125,10 @@ All parameters are exposed in the GUI as sliders **plus** an editable numeric fi
 
 Two named presets, mirroring the Python script. Click a chip to apply.
 
-- **Dark** — short exposure, high ISO, clear eyepiece circle. `downsample 1×, bg_kernel 15`. Default on load.
-- **Stacked** — longer / stacked exposure, brighter background (sky glow fills the field). `downsample 2×, bg_kernel 25`.
+- **Dark** — short exposure, high ISO, dark and roughly uniform background. `downsample 1×, bg_kernel 15`. Default on load.
+- **Stacked** — long / stacked exposure, bright and uneven background (sky glow fills much of the field). `downsample 2×, bg_kernel 25`.
 
-The presets only differ in `downsample` and `bg_kernel`; all other defaults are shared. After applying, you can fine-tune any slider; the preset highlight dims to indicate "custom mode". Hit **Reset** to snap back to the last preset.
+The presets only differ in `downsample` and `bg_kernel`; all other defaults — including `crop = 1` and the blob-level halo filter — are shared. Both presets feed the same `auto_crop_to_field` pass when crop is on, and both can be flipped to `crop = 0` to process the full frame. The reason the boundary halo was historically only obvious in the Stacked case is that a bright background creates a stronger contrast against the zeroed exterior, exposing the median-filter halo more clearly. After applying a preset, you can fine-tune any slider; the preset highlight dims to indicate "custom mode". Hit **Reset** to snap back to the last preset.
 
 ## App architecture
 
@@ -238,7 +248,7 @@ Open the deployed URL in Safari → Share → **Add to Home Screen**. The PWA ma
 
 The Python version has been kept in sync with the JS fixes:
 
-- always-on circular crop (no `--no-crop` flag)
+- circular crop optional via `--crop 0` (default on)
 - boundary halo suppression after background subtraction
 - both `dark` and `stacked` presets crop
 
@@ -248,6 +258,7 @@ Run it with:
 pip install pillow numpy scipy
 python astro_preprocess.py my_image.jpg                    # Dark preset (default)
 python astro_preprocess.py my_image.jpg --preset stacked   # Stacked preset
+python astro_preprocess.py my_image.jpg --crop 0           # disable circular crop
 python astro_preprocess.py my_image.jpg --bg-kernel 25     # override individual params
 ```
 
@@ -266,7 +277,7 @@ astro-platesolve/
 │   ├── input.jpeg          Short-exposure / Dark preset case
 │   ├── output.png          Expected output for input.jpeg
 │   ├── input2.jpeg         Stacked-exposure / Stacked preset case (bright background)
-│   └── output2.png         Reference for input2 (note: from the older no_crop pipeline)
+│   └── output2.png         Reference for input2 (legacy output from the original pipeline; current pipeline preserves rim stars it was missing)
 ├── icon.svg                App icon — eyepiece field with stars
 ├── favicon.svg             Compact favicon
 ├── icon-{180,192,512}.png  Rasterized icons for iOS Add-to-Home and the PWA manifest
@@ -282,4 +293,5 @@ astro-platesolve/
 - **Real stars missing** → lower `threshold` or `min_blob`. Confirm `min_blob` AUTO badge is appropriate for your downsample.
 - **Coloured speckle remains in output** → lower `color_cv` (e.g. 0.3).
 - **Large bright objects (moon, planet) being rejected** → raise `max_blob`.
-- **Faint stars being washed out by the boundary halo** → already handled by edge erosion; if you still see ring artifacts, raise `bg_kernel` so more of the rim is excluded.
+- **Field circle partially out of frame, or auto-crop misbehaves** → set `crop` to 0. The output keeps the original framing and the rest of the pipeline still produces a usable star catalogue.
+- **Ring artifacts at the rim with crop on** → already handled by the blob-level halo filter; if you still see them, raise `bg_kernel` (the halo annulus widens with kernel size, so the filter excludes more of the boundary).

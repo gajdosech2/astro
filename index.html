@@ -21,7 +21,7 @@
 
 <header>
   <div class="brand">
-    <img src="icon.svg" alt="" width="32" height="32">
+    <img src="icon.svg" alt="" width="128" height="128">
     <div>
       <h1>Astro Platesolve</h1>
       <p>Preprocessor for <a href="https://nova.astrometry.net" target="_blank" rel="noopener">nova.astrometry.net</a></p>
@@ -70,11 +70,11 @@
     <div class="preset-row">
       <button class="preset-btn active" data-preset="dark">
         <span class="preset-name">Dark</span>
-        <span class="preset-desc">Short exposure · high ISO · clear eyepiece circle</span>
+        <span class="preset-desc">Short exposure · high ISO · dark background</span>
       </button>
       <button class="preset-btn" data-preset="stacked">
         <span class="preset-name">Stacked</span>
-        <span class="preset-desc">Longer / stacked exposure · brighter background</span>
+        <span class="preset-desc">Long exposure · stacked images · bright background</span>
       </button>
     </div>
   </section>
@@ -82,6 +82,17 @@
   <section class="card params">
     <details open>
       <summary>Parameters</summary>
+
+      <div class="slider" data-key="crop">
+        <div class="slider-head">
+          <label for="crop">Circular crop</label>
+          <div class="slider-chip">
+            <input type="number" id="crop-num" inputmode="numeric" min="0" max="1" step="1">
+          </div>
+        </div>
+        <input type="range" id="crop">
+        <p class="muted">Detect the eyepiece field, mask it to a circle and crop to the inscribed square. <strong>1 = on (default)</strong>, <strong>0 = off</strong> (process the full frame as-is). Turn off if the field circle is partially out of view or if the auto-detection misbehaves on a particular image.</p>
+      </div>
 
       <div class="slider" data-key="downsample">
         <div class="slider-head">
