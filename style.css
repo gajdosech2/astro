@@ -129,12 +129,13 @@ button.ghost:hover { background: var(--bg-input); }
 .preview canvas {
   display: block;
   width: 100%;
-  height: auto;
+  aspect-ratio: 1 / 1;
   background: #000;
   border-radius: var(--r-sm);
   border: 1px solid var(--line);
   max-height: 70vh;
   object-fit: contain;
+  margin: 0 auto;
 }
 
 /* ── Actions ───────────────────────────────────────────── */
@@ -170,7 +171,35 @@ button.ghost:hover { background: var(--bg-input); }
   transition: width 0.18s ease-out;
 }
 
+.result-display {
+  margin-top: 14px;
+  padding: 10px;
+  background: rgba(110, 231, 164, 0.05);
+  border: 1px dashed rgba(110, 231, 164, 0.2);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: var(--muted);
+  display: none;
+  text-align: center;
+}
+.result-display.active { display: block; }
+.result-display strong { color: var(--ok); font-size: 16px; margin: 0 2px; }
+
 /* ── Presets ───────────────────────────────────────────── */
+.link-btn {
+  background: transparent;
+  color: var(--accent);
+  border: 0;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 0;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.link-btn:hover { background: var(--bg-input); }
+
+/*
 .preset-head {
   display: flex;
   justify-content: space-between;
@@ -185,18 +214,6 @@ button.ghost:hover { background: var(--bg-input); }
   color: var(--muted);
   font-weight: 600;
 }
-.link-btn {
-  background: transparent;
-  color: var(--accent);
-  border: 0;
-  padding: 4px 8px;
-  font-size: 13px;
-  font-weight: 500;
-  min-height: 0;
-  cursor: pointer;
-  border-radius: 6px;
-}
-.link-btn:hover { background: var(--bg-input); }
 
 .preset-row {
   display: grid;
@@ -234,6 +251,7 @@ button.ghost:hover { background: var(--bg-input); }
   color: var(--muted);
   line-height: 1.4;
 }
+*/
 
 /* ── Sliders ───────────────────────────────────────────── */
 details { display: block; }

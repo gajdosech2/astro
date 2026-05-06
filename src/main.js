@@ -1,69 +1,29 @@
 /*
- * Astrophoto Plate-Solve Preprocessor — main thread / UI
+ * AstroPrep — main thread / UI
  */
 
 const $ = (sel) => document.querySelector(sel);
 
-// Two named presets, mirrored from astro_preprocess.py.
-// Order of keys matters: downsample is set first so that the auto min-blob
-// derives from the correct value when applyPreset() runs the iteration.
-const PRESETS = {
-  dark: {
-    // Short exposure, high ISO, dark background (Python script defaults).
-    // The smaller bg-kernel is enough since the background is nearly uniform.
-    crop:       1,
-    downsample: 1,
-    bgKernel:   15,
-    threshold:  10,
-    minBlob:    'auto',
-    maxBlob:    2000,
-    maxCompact: 3.0,
-    colorCV:    0.5,
-    glowSigma:  1.5,
-    stretch:    3.0,
-    bgLift:     12,
-  },
-  stacked: {
-    // Long / stacked exposure, brighter background (sky glow fills corners).
-    // Larger bg kernel handles uneven background; downsample 2× since the
-    // median filter is the slow step.
-    crop:       1,
-    downsample: 2,
-    bgKernel:   25,
-    threshold:  10,
-    minBlob:    'auto',
-    maxBlob:    2000,
-    maxCompact: 3.0,
-    colorCV:    0.5,
-    glowSigma:  1.5,
-    stretch:    3.0,
-    bgLift:     12,
-  },
-};
-
-const DEFAULT_PRESET = 'dark';
-
-// Slider definitions: id (also param key), bounds, step, decimal display.
+// Slider definitions: id (also param key), bounds, step, decimal display, default.
 const SLIDERS = [
-  { id: 'crop',       min: 0,   max: 1,    step: 1,    digits: 0 },
-  { id: 'downsample', min: 1,   max: 4,    step: 1,    digits: 0 },
-  { id: 'bgKernel',   min: 3,   max: 51,   step: 2,    digits: 0 },
-  { id: 'threshold',  min: 1,   max: 50,   step: 1,    digits: 0 },
-  { id: 'minBlob',    min: 1,   max: 100,  step: 1,    digits: 0 },
-  { id: 'maxBlob',    min: 50,  max: 5000, step: 50,   digits: 0 },
-  { id: 'maxCompact', min: 0.5, max: 10,   step: 0.1,  digits: 1 },
-  { id: 'colorCV',    min: 0,   max: 1,    step: 0.05, digits: 2 },
-  { id: 'glowSigma',  min: 0,   max: 5,    step: 0.1,  digits: 1 },
-  { id: 'stretch',    min: 0.5, max: 10,   step: 0.1,  digits: 1 },
-  { id: 'bgLift',     min: 0,   max: 50,   step: 1,    digits: 0 },
+  { id: 'crop',       min: 0,   max: 1,    step: 1,    digits: 0, default: 1 },
+  { id: 'downsample', min: 1,   max: 4,    step: 1,    digits: 0, default: 2 },
+  { id: 'bgKernel',   min: 3,   max: 51,   step: 2,    digits: 0, default: 20 },
+  { id: 'threshold',  min: 1,   max: 50,   step: 1,    digits: 0, default: 10 },
+  { id: 'minBlob',    min: 1,   max: 100,  step: 1,    digits: 0, default: 4 },
+  { id: 'maxBlob',    min: 50,  max: 5000, step: 50,   digits: 0, default: 2000 },
+  { id: 'maxCompact', min: 0.5, max: 20,   step: 0.1,  digits: 1, default: 6.0 },
+  { id: 'colorCV',    min: 0,   max: 1,    step: 0.05, digits: 2, default: 0.5 },
+  { id: 'glowSigma',  min: 0,   max: 5,    step: 0.1,  digits: 1, default: 1.5 },
+  { id: 'stretch',    min: 0.5, max: 10,   step: 0.1,  digits: 1, default: 3.0 },
+  { id: 'bgLift',     min: 0,   max: 50,   step: 1,    digits: 0, default: 12 },
 ];
 
 const state = {
   bitmap:       null,    // ImageBitmap of uploaded photo (with EXIF orientation applied)
   worker:       null,
   outBlob:      null,    // last processed PNG blob, for download
-  outName:      'platesolve.png',
-  activePreset: DEFAULT_PRESET,
+  outName:      'astroprep.png',
 };
 
 /* ─────── Sliders: range ⇄ number input sync ──────── */
@@ -82,16 +42,7 @@ function setSliderValue(id, v, opts = {}) {
   cv = Math.max(s.min, Math.min(s.max, cv));
   range.value = cv;
   if (!opts.fromNumber) num.value = fmtVal(id, cv);
-  // minBlob auto flag: clear unless we set it via "auto"
-  if (id === 'minBlob') {
-    const chip = num.closest('.slider-chip');
-    if (opts.auto) chip.classList.add('auto'); else chip.classList.remove('auto');
-  }
   return cv;
-}
-
-function deactivatePresets() {
-  document.querySelectorAll('.preset-btn').forEach((b) => b.classList.remove('active'));
 }
 
 function setupSliders() {
@@ -102,72 +53,33 @@ function setupSliders() {
     range.min = s.min; range.max = s.max; range.step = s.step;
     num.min   = s.min; num.max   = s.max; num.step   = s.step;
 
-    // Width the field to fit the longest possible formatted value (e.g. "5000",
-    // "0.50", "10.0"). +0.5 ch of padding so the caret never overlaps a digit.
     const widest = [s.min, s.max].map((v) => fmtVal(s.id, v).length).reduce((a, b) => Math.max(a, b), 1);
     num.style.width = `${widest + 0.5}ch`;
 
-    range.addEventListener('input', () => {
-      setSliderValue(s.id, range.value);
-      if (s.id === 'minBlob') $(`#minBlob-num`).closest('.slider-chip').classList.remove('auto');
-      if (s.id === 'downsample') refreshAutoMinBlob();
-      deactivatePresets();
-    });
-    num.addEventListener('input', () => {
-      setSliderValue(s.id, num.value, { fromNumber: true });
-      if (s.id === 'minBlob') $(`#minBlob-num`).closest('.slider-chip').classList.remove('auto');
-      if (s.id === 'downsample') refreshAutoMinBlob();
-      deactivatePresets();
-    });
+    range.addEventListener('input', () => setSliderValue(s.id, range.value));
+    num.addEventListener('input', () => setSliderValue(s.id, num.value, { fromNumber: true }));
     num.addEventListener('blur', () => {
       const v = parseFloat(num.value);
       if (!Number.isNaN(v)) num.value = fmtVal(s.id, Math.max(s.min, Math.min(s.max, v)));
     });
+
+    // Initial value
+    setSliderValue(s.id, s.default);
   }
 }
 
-function isMinBlobAuto() {
-  return $('#minBlob-num').closest('.slider-chip').classList.contains('auto');
-}
-
-function refreshAutoMinBlob() {
-  if (!isMinBlobAuto()) return;
-  const ds = parseInt($('#downsample').value, 10);
-  setSliderValue('minBlob', Math.max(2, Math.floor(15 / ds)), { auto: true });
+function resetDefaults() {
+  for (const s of SLIDERS) {
+    setSliderValue(s.id, s.default);
+  }
 }
 
 function readParams() {
-  return {
-    crop:       parseInt($('#crop').value, 10),
-    downsample: parseInt($('#downsample').value, 10),
-    bgKernel:   parseInt($('#bgKernel').value, 10),
-    threshold:  parseFloat($('#threshold').value),
-    minBlob:    parseFloat($('#minBlob').value),
-    maxBlob:    parseFloat($('#maxBlob').value),
-    maxCompact: parseFloat($('#maxCompact').value),
-    colorCV:    parseFloat($('#colorCV').value),
-    glowSigma:  parseFloat($('#glowSigma').value),
-    stretch:    parseFloat($('#stretch').value),
-    bgLift:     parseFloat($('#bgLift').value),
-  };
-}
-
-function applyPreset(name) {
-  const p = PRESETS[name];
-  if (!p) return;
-  // Apply each slider value. minBlob: 'auto' is computed from downsample.
-  for (const [k, v] of Object.entries(p)) {
-    if (k === 'minBlob' && v === 'auto') {
-      const ds = parseInt($('#downsample').value, 10);
-      setSliderValue('minBlob', Math.max(2, Math.floor(15 / ds)), { auto: true });
-    } else {
-      setSliderValue(k, v);
-    }
+  const p = {};
+  for (const s of SLIDERS) {
+    p[s.id] = parseFloat($(`#${s.id}`).value);
   }
-  document.querySelectorAll('.preset-btn').forEach((b) => {
-    b.classList.toggle('active', b.dataset.preset === name);
-  });
-  state.activePreset = name;
+  return p;
 }
 
 /* ─────── Image loading ─────────────────────────────── */
@@ -176,7 +88,7 @@ async function loadImageFile(file) {
   $('#log').textContent = '';
   state.outBlob = null;
   $('#download').disabled = true;
-  state.outName = file.name.replace(/\.[^.]+$/, '') + '_platesolve.png';
+  state.outName = file.name.replace(/\.[^.]+$/, '') + '_astroprep.png';
 
   appendLog(`Loading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)…`);
 
@@ -252,7 +164,7 @@ async function process() {
       $('#progress-label').textContent = `${m.stage} — ${m.pct}%`;
       $('#progress-bar').style.width = `${m.pct}%`;
     } else if (m.type === 'done') {
-      onProcessDone(m.rgba, m.width, m.height);
+      onProcessDone(m.rgba, m.width, m.height, m.estDetections);
     } else if (m.type === 'error') {
       appendLog(`ERROR: ${m.msg}`);
       openLog();
@@ -269,7 +181,7 @@ async function process() {
   );
 }
 
-async function onProcessDone(rgba, w, h) {
+async function onProcessDone(rgba, w, h, estDetections) {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -289,6 +201,8 @@ async function onProcessDone(rgba, w, h) {
     $('#process').disabled = false;
     $('#process').textContent = 'Process';
     $('#progress-row').classList.remove('active');
+    $('#result-row').classList.add('active');
+    $('#detection-count').textContent = estDetections;
     appendLog(`PNG ready (${(blob.size / 1024).toFixed(0)} KB) — tap Download.`);
   }, 'image/png');
 }
@@ -319,11 +233,6 @@ function openLog() {
 
 function init() {
   setupSliders();
-  applyPreset(DEFAULT_PRESET);
-
-  document.querySelectorAll('.preset-btn').forEach((btn) => {
-    btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
-  });
 
   $('#file').addEventListener('change', (e) => {
     const f = e.target.files[0];
@@ -335,7 +244,7 @@ function init() {
 
   $('#sample').addEventListener('click', async () => {
     try {
-      const res = await fetch('samples/input.jpeg');
+      const res = await fetch('samples/input1.jpeg');
       if (!res.ok) throw new Error(`Sample fetch ${res.status}: ${res.statusText}`);
       const blob = await res.blob();
       await loadImageFile(new File([blob], 'sample.jpeg', { type: 'image/jpeg' }));
@@ -348,7 +257,7 @@ function init() {
 
   $('#process').addEventListener('click', process);
   $('#download').addEventListener('click', downloadResult);
-  $('#reset').addEventListener('click', () => applyPreset(state.activePreset));
+  $('#reset').addEventListener('click', resetDefaults);
   $('#choose').addEventListener('click', () => $('#file').click());
 }
 

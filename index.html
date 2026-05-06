@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Platesolve">
+<meta name="apple-mobile-web-app-title" content="AstroPrep">
 <meta name="description" content="Clean up afocal phone astrophotos for Nova Astrometry plate solving — runs entirely in your browser.">
 
-<title>Astro Platesolve · Preprocessor</title>
+<title>AstroPrep · Preprocessor</title>
 
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -23,7 +23,7 @@
   <div class="brand">
     <img src="icon.svg" alt="" width="128" height="128">
     <div>
-      <h1>Astro Platesolve</h1>
+      <h1>AstroPrep</h1>
       <p>Preprocessor for <a href="https://nova.astrometry.net" target="_blank" rel="noopener">nova.astrometry.net</a></p>
     </div>
   </div>
@@ -60,8 +60,12 @@
       <div class="progress-track"><div id="progress-bar"></div></div>
       <span id="progress-label">idle</span>
     </div>
+    <div id="result-row" class="result-display">
+      Estimated detections: <strong id="detection-count">0</strong> stars
+    </div>
   </section>
 
+  <!--
   <section class="card preset-card">
     <div class="preset-head">
       <h3>Preset</h3>
@@ -78,21 +82,25 @@
       </button>
     </div>
   </section>
+  -->
 
   <section class="card params">
     <details open>
-      <summary>Parameters</summary>
+      <summary>
+        Parameters
+        <button id="reset" class="link-btn" title="Reset all parameters to defaults">Reset</button>
+      </summary>
 
       <div class="slider" data-key="crop">
         <div class="slider-head">
-          <label for="crop">Circular crop</label>
+          <label for="crop">Auto crop</label>
           <div class="slider-chip">
             <input type="number" id="crop-num" inputmode="numeric" min="0" max="1" step="1">
           </div>
         </div>
         <input type="range" id="crop">
-        <p class="muted">Detect the eyepiece field, mask it to a circle and crop to the inscribed square. <strong>1 = on (default)</strong>, <strong>0 = off</strong> (process the full frame as-is). Turn off if the field circle is partially out of view or if the auto-detection misbehaves on a particular image.</p>
-      </div>
+        <p class="muted">Detect the eyepiece field by luminance, crop to a square and mask the boundary to eliminate noise. <strong>1 = on (default)</strong>, <strong>0 = off</strong> (process full frame).</p>
+        </div>
 
       <div class="slider" data-key="downsample">
         <div class="slider-head">
@@ -115,7 +123,7 @@
           </div>
         </div>
         <input type="range" id="bgKernel">
-        <p class="muted">Median filter radius for sky-glow estimation. Default 15. Raise to 25 px for bright/uneven backgrounds.</p>
+        <p class="muted">Median filter size for sky-glow estimation. Default 20.</p>
       </div>
 
       <div class="slider" data-key="threshold">
@@ -133,13 +141,13 @@
       <div class="slider" data-key="minBlob">
         <div class="slider-head">
           <label for="minBlob">Min blob size</label>
-          <div class="slider-chip" title="When the AUTO badge is on, this field tracks 15 ÷ downsample. Drag the slider or type a value to override; the badge will turn off.">
+          <div class="slider-chip">
             <input type="number" id="minBlob-num" inputmode="numeric" min="1" max="100" step="1">
             <span class="suffix">px</span>
           </div>
         </div>
         <input type="range" id="minBlob">
-        <p class="muted">Primary noise filter. Real stars ≥ 15 px, noise spikes &lt; 10 px. The <strong>AUTO</strong> badge means the value is derived from downsample (15 ÷ N); change the value to take manual control.</p>
+        <p class="muted">Primary noise filter. Real stars are large diffuse blobs, noise spikes are tiny. Default 4.</p>
       </div>
 
       <div class="slider" data-key="maxBlob">
@@ -158,11 +166,11 @@
         <div class="slider-head">
           <label for="maxCompact">Max compactness</label>
           <div class="slider-chip">
-            <input type="number" id="maxCompact-num" inputmode="decimal" min="0.5" max="10" step="0.1">
+            <input type="number" id="maxCompact-num" inputmode="decimal" min="0.5" max="20" step="0.1">
           </div>
         </div>
         <input type="range" id="maxCompact">
-        <p class="muted">peak/area ratio. Real stars ≤ 2.2, noise spikes ≥ 9. Default 3.0 has a clean gap for iPhone afocal shots.</p>
+        <p class="muted">peak/area ratio. Real stars ≤ 6.0, noise spikes ≥ 10. Default 6.0.</p>
       </div>
 
       <div class="slider" data-key="colorCV">

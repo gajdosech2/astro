@@ -1,5 +1,5 @@
 /*
- * Astrophoto Plate-Solve Preprocessor — Web Worker
+ * AstroPrep — Web Worker
  * Port of astro_preprocess.py
  *
  * Receives RGBA pixel data + parameters, returns a single-channel
@@ -16,7 +16,13 @@ if (isWorker) {
     try {
       const result = run(rgba, width, height, params);
       self.postMessage(
-        { type: 'done', rgba: result.rgba, width: result.width, height: result.height },
+        { 
+          type: 'done', 
+          rgba: result.rgba, 
+          width: result.width, 
+          height: result.height, 
+          estDetections: result.estDetections 
+        },
         [result.rgba.buffer]
       );
     } catch (err) {
@@ -37,71 +43,59 @@ function run(rgba, w, h, p) {
   let r = new Float32Array(w * h);
   let g = new Float32Array(w * h);
   let b = new Float32Array(w * h);
+  let lum = new Float32Array(w * h);
+  let lumSum = 0;
   for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
     r[j] = rgba[i];
     g[j] = rgba[i + 1];
     b[j] = rgba[i + 2];
-  }
-
-  // ── Crop to circular eyepiece field (optional, default on) ───────────
-  // When disabled, fieldRadius stays 0 and the downstream blob-level halo
-  // filter becomes a no-op — the median filter sees no synthetic exterior
-  // discontinuity, so no halo is generated either.
-  let fieldRadius = 0;
-  let fieldCx     = w / 2;
-  let fieldCy     = h / 2;
-  if (p.crop) {
-    progress('crop', 0);
-    const cropped = autoCropToField(r, g, b, w, h);
-    r = cropped.r; g = cropped.g; b = cropped.b;
-    w = cropped.w; h = cropped.h;
-    fieldRadius = cropped.radius;
-    fieldCx     = cropped.cx;
-    fieldCy     = cropped.cy;
-    log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (radius ${fieldRadius}px)`);
-  } else {
-    log(`[crop]   skipped — circular crop disabled, processing full frame`);
-  }
-
-  // ── Compute luminance ────────────────────────────────────────────────
-  const lum = new Float32Array(w * h);
-  let lumSum = 0;
-  for (let i = 0; i < w * h; i++) {
-    lum[i] = 0.299 * r[i] + 0.587 * g[i] + 0.114 * b[i];
-    lumSum += lum[i];
+    lum[j] = 0.299 * r[j] + 0.587 * g[j] + 0.114 * b[j];
+    lumSum += lum[j];
   }
   const lumMean = lumSum / (w * h);
-  log(`[bg]     Mean luminance: ${lumMean.toFixed(1)} (>30 suggests bright sky, raise bg-kernel)`);
+
+  // ── Crop to eyepiece field (optional, default on) ────────────────────
+  let fieldMask = null;
+  if (p.crop) {
+    progress('crop', 0);
+    const cropped = autoCropToField(r, g, b, lum, w, h, lumMean);
+    r = cropped.r; g = cropped.g; b = cropped.b;
+    lum = cropped.lum;
+    w = cropped.w; h = cropped.h;
+    fieldMask = cropped.mask;
+    log(`[crop]   ${cropped.origW}×${cropped.origH} → ${w}×${h} px (padded square)`);
+  } else {
+    log(`[crop]   skipped — crop disabled, processing full frame`);
+  }
+
+  log(`[bg]     Mean luminance: ${lumMean.toFixed(1)}`);
 
   // ── Background subtraction (median filter) ───────────────────────────
   progress('median', 0);
   log(`[bg]     Median filter, kernel=${p.bgKernel}…`);
   const bg = medianFilter2D(lum, w, h, (p.bgKernel - 1) >> 1);
-  const cleaned = new Float32Array(w * h);
+  let cleaned = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
     cleaned[i] = Math.max(0, Math.min(255, lum[i] - bg[i]));
   }
 
-  // Make sure any pixel that might have leaked outside the field circle
-  // during the median filter is zeroed (the median window straddling the
-  // exterior would have produced a non-zero cleaned value otherwise).
-  // The actual halo *inside* the rim is rejected at the blob level in
-  // extractStars — see "boundary halo" filter there.
-  if (fieldRadius > 0) {
-    const rField2 = fieldRadius * fieldRadius;
-    for (let y = 0; y < h; y++) {
-      const dy = y - fieldCy;
-      const dy2 = dy * dy;
-      for (let x = 0; x < w; x++) {
-        const dx = x - fieldCx;
-        if (dx * dx + dy2 > rField2) cleaned[y * w + x] = 0;
+  // ── Mask eyepiece field (erosion) ────────────────────────────────────
+  // Shrink the field mask (erosion) and apply it to both RGB and luminance
+  // data. This eliminates the "halo" artifacts around the eyepiece rim.
+  if (fieldMask) {
+    const margin = (p.bgKernel >> 1) + 2;
+    const erodedMask = binaryErosion(fieldMask, w, h, margin);
+    for (let i = 0; i < w * h; i++) {
+      if (!erodedMask[i]) {
+        cleaned[i] = 0;
+        r[i] = 0; g[i] = 0; b[i] = 0;
       }
     }
   }
 
   // ── Detect & filter blobs ────────────────────────────────────────────
   progress('detect', 0);
-  const mask = extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius);
+  const mask = extractStars(cleaned, r, g, b, w, h, p);
 
   // ── Render output ────────────────────────────────────────────────────
   progress('render', 0);
@@ -121,28 +115,27 @@ function run(rgba, w, h, p) {
     outRgba[j + 2] = out[i];
     outRgba[j + 3] = 255;
   }
-  return { rgba: outRgba, width: w, height: h };
+  return { rgba: outRgba, width: w, height: h, estDetections };
 }
 
 /* ─────────────────────────────────────────────────────────────────────
- * Auto-crop to circular eyepiece field
- *   1. Threshold luminance > 3.0 to find the bright field
+ * Auto-crop to eyepiece field
+ *   1. Threshold luminance > 0.3 * mean to find the bright field
  *   2. Find bbox of bright pixels
- *   3. Build inscribed circle, shrink by 3% to kill boundary artifacts
- *   4. Zero outside circle, crop to bbox of circle
+ *   3. Pad to perfect square centered on the bbox
  * ──────────────────────────────────────────────────────────────────── */
-function autoCropToField(r, g, b, w, h) {
-  const fieldThreshold = 3.0;
-  const shrink = 0.97;
+function autoCropToField(r, g, b, lum, w, h, lumMean) {
+  const fieldThreshold = lumMean * 0.3;
 
   let rmin = h, rmax = -1, cmin = w, cmax = -1;
+  const mask = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
-    let rowHas = false;
     const rowOff = y * w;
+    let rowHas = false;
     for (let x = 0; x < w; x++) {
       const i = rowOff + x;
-      const lum = 0.299 * r[i] + 0.587 * g[i] + 0.114 * b[i];
-      if (lum > fieldThreshold) {
+      if (lum[i] > fieldThreshold) {
+        mask[i] = 1;
         rowHas = true;
         if (x < cmin) cmin = x;
         if (x > cmax) cmax = x;
@@ -155,49 +148,76 @@ function autoCropToField(r, g, b, w, h) {
   }
 
   if (rmax < 0) {
-    // No bright pixels — return as-is
-    log('[crop]   WARNING: no bright field detected, skipping crop');
-    return { r, g, b, w, h, origW: w, origH: h, radius: 0, cx: w / 2, cy: h / 2 };
+    log('[crop]   WARNING: no eyepiece field detected, skipping crop');
+    return { r, g, b, lum, w, h, origW: w, origH: h, mask: null };
   }
 
+  // Center and size for square crop
   const rc = (rmin + rmax) >> 1;
   const cc = (cmin + cmax) >> 1;
-  const radius = Math.floor(Math.min(rmax - rmin, cmax - cmin) / 2 * shrink);
+  const size = Math.max(rmax - rmin, cmax - cmin);
+  const hs = size >> 1;
 
-  const r0 = Math.max(0, rc - radius);
-  const r1 = Math.min(h, rc + radius);
-  const c0 = Math.max(0, cc - radius);
-  const c1 = Math.min(w, cc + radius);
-  const newH = r1 - r0;
-  const newW = c1 - c0;
+  // Create square canvases
+  const nr = new Float32Array(size * size);
+  const ng = new Float32Array(size * size);
+  const nb = new Float32Array(size * size);
+  const nl = new Float32Array(size * size);
+  const nm = new Uint8Array(size * size);
 
-  const nr = new Float32Array(newW * newH);
-  const ng = new Float32Array(newW * newH);
-  const nb = new Float32Array(newW * newH);
+  // Source bounds (clamped to image)
+  const sy0 = Math.max(0, rc - hs);
+  const sy1 = Math.min(h, rc + hs);
+  const sx0 = Math.max(0, cc - hs);
+  const sx1 = Math.min(w, cc + hs);
 
-  const r2 = radius * radius;
-  for (let y = 0; y < newH; y++) {
-    for (let x = 0; x < newW; x++) {
-      const srcY = r0 + y;
-      const srcX = c0 + x;
-      const dy = srcY - rc;
-      const dx = srcX - cc;
-      const inside = dx * dx + dy * dy <= r2;
-      const dst = y * newW + x;
-      if (inside) {
-        const src = srcY * w + srcX;
-        nr[dst] = r[src];
-        ng[dst] = g[src];
-        nb[dst] = b[src];
-      }
+  // Destination bounds (centered on canvas)
+  const dy0 = hs - (rc - sy0);
+  const dx0 = hs - (cc - sx0);
+  const h_actual = sy1 - sy0;
+  const w_actual = sx1 - sx0;
+
+  // Copy data to square frame
+  for (let y = 0; y < h_actual; y++) {
+    const srcRowOff = (sy0 + y) * w;
+    const dstRowOff = (dy0 + y) * size;
+    for (let x = 0; x < w_actual; x++) {
+      const srcIdx = srcRowOff + (sx0 + x);
+      const dstIdx = dstRowOff + (dx0 + x);
+      nr[dstIdx] = r[srcIdx];
+      ng[dstIdx] = g[srcIdx];
+      nb[dstIdx] = b[srcIdx];
+      nl[dstIdx] = lum[srcIdx];
+      nm[dstIdx] = mask[srcIdx];
     }
   }
 
-  // Centre in cropped coordinates (r0, c0 may differ from rc-radius if
-  // the inscribed circle extends past the original image edges).
-  const newCy = rc - r0;
-  const newCx = cc - c0;
-  return { r: nr, g: ng, b: nb, w: newW, h: newH, origW: w, origH: h, radius, cx: newCx, cy: newCy };
+  return { r: nr, g: ng, b: nb, lum: nl, mask: nm, w: size, h: size, origW: w, origH: h };
+}
+
+/** Binary erosion (4-connectivity) for mask cleanup. */
+function binaryErosion(mask, w, h, iterations) {
+  let current = new Uint8Array(mask);
+  for (let iter = 0; iter < iterations; iter++) {
+    const next = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const off = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = off + x;
+        if (!current[i]) continue;
+        // If any neighbor is 0, this pixel becomes 0
+        const top   = y > 0 ? current[i - w] : 1;
+        const bottom = y < h - 1 ? current[i + w] : 1;
+        const left  = x > 0 ? current[i - 1] : 1;
+        const right = x < w - 1 ? current[i + 1] : 1;
+        if (top && bottom && left && right) {
+          next[i] = 1;
+        }
+      }
+    }
+    current = next;
+  }
+  return current;
 }
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -379,7 +399,7 @@ function labelComponents(binary, w, h) {
  * Detect star blobs and apply size / compactness / colour filters.
  * Returns a Uint8Array mask (1 = accepted star pixel).
  * ──────────────────────────────────────────────────────────────────── */
-function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) {
+function extractStars(cleaned, r, g, b, w, h, p) {
   const N = w * h;
   const binary = new Uint8Array(N);
   for (let i = 0; i < N; i++) binary[i] = cleaned[i] > p.threshold ? 1 : 0;
@@ -392,8 +412,6 @@ function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) 
   const sumR  = new Float32Array(count + 1);
   const sumG  = new Float32Array(count + 1);
   const sumB  = new Float32Array(count + 1);
-  const sumX  = new Float32Array(count + 1);
-  const sumY  = new Float32Array(count + 1);
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -405,26 +423,12 @@ function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) 
       sumR[lbl] += r[i];
       sumG[lbl] += g[i];
       sumB[lbl] += b[i];
-      sumX[lbl] += x;
-      sumY[lbl] += y;
     }
   }
 
-  // Boundary halo (only meaningful when crop is on, i.e. fieldRadius > 0):
-  // blobs whose centroid lies in the median-bias annulus and whose peak is
-  // too low to be a real star are halo. The halo bias can reach ~50% of
-  // local field brightness when the median window is half outside the
-  // circle. Real rim stars in our samples sit at peaks ≥ 80 DN, so a
-  // 5×-threshold cutoff catches the worst halo while leaving real bright
-  // stars untouched.
-  const haloMargin = Math.ceil(p.bgKernel / 2);
-  const safeRadius = fieldRadius > 0 ? Math.max(1, fieldRadius - haloMargin) : 0;
-  const safeR2     = safeRadius * safeRadius;
-  const haloMax    = 5 * p.threshold;
-
   // Accept/reject per blob
   const accept = new Uint8Array(count + 1);
-  let nSize = 0, nCompact = 0, nColor = 0, nHalo = 0, nKept = 0;
+  let nSize = 0, nCompact = 0, nColor = 0, nKept = 0;
   for (let lbl = 1; lbl <= count; lbl++) {
     const sz = sizes[lbl];
     if (sz < p.minBlob || sz > p.maxBlob) { nSize++; continue; }
@@ -441,15 +445,6 @@ function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) 
     const cv = Math.sqrt(variance) / meanRgb;
     if (cv > p.colorCV) { nColor++; continue; }
 
-    if (fieldRadius > 0) {
-      const dx = sumX[lbl] / sz - fieldCx;
-      const dy = sumY[lbl] / sz - fieldCy;
-      if (dx * dx + dy * dy > safeR2 && peaks[lbl] < haloMax) {
-        nHalo++;
-        continue;
-      }
-    }
-
     accept[lbl] = 1;
     nKept++;
   }
@@ -457,10 +452,9 @@ function extractStars(cleaned, r, g, b, w, h, p, fieldCx, fieldCy, fieldRadius) 
   log(`[filter] Rejected by size        (<${p.minBlob} or >${p.maxBlob} px): ${nSize}`);
   log(`[filter] Rejected by compactness (peak/size > ${p.maxCompact}):    ${nCompact}`);
   log(`[filter] Rejected by colour      (CV > ${p.colorCV}):              ${nColor}`);
-  log(`[filter] Rejected by halo        (rim, peak < ${haloMax} DN):      ${nHalo}`);
   log(`[result] Stars accepted: ${nKept}`);
-  if (nKept < 10) log(`[warn]   Only ${nKept} stars — try lowering threshold or min-blob.`);
-  if (nKept > 200) log(`[warn]   ${nKept} stars — may still be noisy, try raising threshold or min-blob.`);
+  if (nKept < 10) log(`[warn]   Only ${nKept} stars found — try lowering threshold or min-blob.`);
+  if (nKept > 200) log(`[warn]   ${nKept} stars found — may still be noisy, try raising threshold or min-blob.`);
 
   // Build pixel mask from accepted labels
   const mask = new Uint8Array(N);
@@ -485,15 +479,24 @@ function renderOutput(cleaned, mask, w, h, p) {
   let maxV = 0;
   for (let i = 0; i < N; i++) if (star[i] > maxV) maxV = star[i];
 
-  const out = new Float32Array(N);
+  const out = new Uint8Array(N);
   if (maxV > 0) {
     const scale = (255 / maxV) * p.stretch;
     for (let i = 0; i < N; i++) {
-      const v = star[i] * scale + p.bgLift;
-      out[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+      let v = star[i] * scale;
+      if (v > 255) v = 255;
+      v += p.bgLift;
+      if (v < 0) v = 0;
+      if (v > 255) v = 255;
+      out[i] = v;
     }
   } else {
-    for (let i = 0; i < N; i++) out[i] = p.bgLift;
+    for (let i = 0; i < N; i++) {
+      let v = p.bgLift;
+      if (v < 0) v = 0;
+      if (v > 255) v = 255;
+      out[i] = v;
+    }
   }
 
   return out;
