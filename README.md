@@ -70,7 +70,7 @@ The median filter is unreliable near the boundary between the lit field and the 
 
 ### 6. Star detection & filtering
 
-Threshold the cleaned image at `threshold` DN (default 10) and run **connected component labeling**. Then evaluate each blob through a filter pipeline:
+Threshold the cleaned image at `threshold` DN (default 20) and run **connected component labeling**. Then evaluate each blob through a filter pipeline:
 
 | Filter | Reject if | Why |
 |---|---|---|
@@ -89,7 +89,7 @@ Take the cleaned luminance under the accepted-star mask, apply a small Gaussian 
 | `crop` | 1 | Detect the eyepiece field and crop to a square. |
 | `downsample` | 2× | Process at 1/N resolution. Higher = faster. |
 | `bg_kernel` | 20 | Median filter size for background estimation. |
-| `threshold` | 10 | DN above local background to enter detection. |
+| `threshold` | 20 | DN above local background to enter detection. |
 | `min_blob` | 4 | Minimum star size in pixels. Primary noise filter. |
 | `max_blob` | 2000 | Maximum star size. |
 | `max_compact` | 6.0 | Reject blobs with peak/size above this. |

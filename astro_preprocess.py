@@ -41,7 +41,7 @@ from scipy.ndimage import median_filter, label, gaussian_filter, binary_erosion
 DEFAULT_BG_KERNEL   = 20    # Median filter size for sky background estimation.
                             # Larger handles uneven backgrounds better.
 
-DEFAULT_THRESHOLD   = 10    # DN above local background to enter detection.
+DEFAULT_THRESHOLD   = 20    # DN above local background to enter detection.
                             # Keep low — real stars are large diffuse blobs and
                             # their per-pixel delta is modest. Noise is handled
                             # by the size and compactness filters instead.

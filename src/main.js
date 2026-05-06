@@ -9,7 +9,7 @@ const SLIDERS = [
   { id: 'crop',       min: 0,   max: 1,    step: 1,    digits: 0, default: 1 },
   { id: 'downsample', min: 1,   max: 4,    step: 1,    digits: 0, default: 2 },
   { id: 'bgKernel',   min: 3,   max: 51,   step: 2,    digits: 0, default: 20 },
-  { id: 'threshold',  min: 1,   max: 50,   step: 1,    digits: 0, default: 10 },
+  { id: 'threshold',  min: 1,   max: 50,   step: 1,    digits: 0, default: 20 },
   { id: 'minBlob',    min: 1,   max: 100,  step: 1,    digits: 0, default: 4 },
   { id: 'maxBlob',    min: 50,  max: 5000, step: 50,   digits: 0, default: 2000 },
   { id: 'maxCompact', min: 0.5, max: 20,   step: 0.1,  digits: 1, default: 6.0 },
