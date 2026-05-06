@@ -1,6 +1,6 @@
 # AstroPrep
 
-A browser-based preprocessor for afocal phone astrophotos, used as a front end for [nova.astrometry.net](https://nova.astrometry.net) plate solving. Tuned for iPhone 12 Pro shots through a Dobsonian eyepiece — the workflow is to point, snap, then drop the JPEG into this tool to extract a clean star field for the astrometry source extractor.
+A browser-based preprocessor for afocal phone astrophotos, designed to be used before [nova.astrometry.net](https://nova.astrometry.net) plate solving. Tuned for iPhone 12 Pro shots through a Dobsonian eyepiece — the workflow is to point, snap, then drop the JPEG into this tool to extract a clean star field for the astrometry source extractor.
 
 All processing runs **entirely client-side** in a Web Worker. There is no backend; photos never leave the device. The repository is a static site — push to GitHub, hook up Vercel, and it deploys with zero configuration.
 
@@ -31,7 +31,7 @@ This tool takes the JPEG and produces a clean greyscale PNG containing only real
 - **Input:** raw afocal phone photo (any orientation, JPEG/PNG/HEIC).
 - **Output:** square PNG, eyepiece field cropped and masked, only confirmed stars rendered as `_astroprep.png`.
 
-The output drops directly into the Nova Astrometry upload form.
+The output can be dropped directly into the Nova Astrometry upload form.
 
 ## Algorithm in detail
 
@@ -175,5 +175,4 @@ AstroPrep/
 - **Real stars missing** → lower `threshold` or `min_blob`.
 - **Coloured speckle remains in output** → lower `color_cv` (e.g. 0.3).
 - **Large bright objects (moon, planet) being rejected** → raise `max_blob`.
-- **Field circle partially out of frame** → set `crop` to 0.
 - **Ring artifacts at the rim** → raise `bg_kernel` to widen the safe zone erosion.
