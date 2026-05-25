@@ -74,6 +74,16 @@ DEFAULT_BG_LIFT     = 12    # Background grey level in output image (0 = pure bl
                             # A slight lift helps the source extractor set its
                             # detection threshold cleanly.
 
+DEFAULT_SAT_BOOST   = 2.5   # Saturation multiplier applied during colour rendering.
+                            # Pushes each star's RGB away from grey to amplify the
+                            # natural colour cast (blue giants, red dwarfs, etc.).
+                            # 0.0 = greyscale stars (matches original behaviour),
+                            # 1.0 = natural unmodified colours, 2-3 = visually
+                            # pleasing, 4+ = vivid/artistic. Has no effect on
+                            # plate-solving quality. Use with --color-cv 1.0 to
+                            # preserve coloured stars that would otherwise be
+                            # rejected by the noise filter.
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -221,22 +231,62 @@ def extract_stars(cleaned:     np.ndarray,
 
 def render_output(cleaned:    np.ndarray,
                   mask:       np.ndarray,
+                  rgb:        tuple,
                   glow_sigma: float,
                   stretch:    float,
-                  bg_lift:    int) -> np.ndarray:
+                  bg_lift:    int,
+                  sat_boost:  float) -> np.ndarray:
     """
-    Render confirmed stars with smooth Gaussian profiles.
+    Render accepted stars as a colour RGB image.
+
+    Shape and brightness profile come from `cleaned` (the background-
+    subtracted luminance): because the sky offset has been removed, each
+    star already fades naturally to zero at its edges. A Gaussian blur
+    with `glow_sigma` then softens the hard mask boundary.
+
+    Colour is derived by computing per-pixel ratios of each raw channel
+    to the raw luminance (r/lum, g/lum, b/lum) and multiplying them onto
+    `cleaned`. This tints the smooth profile without reintroducing any
+    background offset. The resulting channels are normalised together,
+    lifted by `bg_lift`, then pushed away from grey by `sat_boost` to
+    amplify the natural star colour cast.
     """
-    star_data = np.where(mask, cleaned, 0.0)
+    r, g, b  = rgb
+    lum_src  = 0.299 * r + 0.587 * g + 0.114 * b
+    safe_lum = np.where(lum_src > 0, lum_src, 1.0)
 
-    if glow_sigma > 0:
-        star_data = gaussian_filter(star_data, sigma=glow_sigma)
+    # Per-pixel colour ratios: how much each channel deviates from neutral.
+    # Multiplying these onto `cleaned` tints the background-subtracted
+    # profile with the star's natural colour without reintroducing the
+    # sky background offset that would otherwise flatten the star's edges.
+    r_ratio = r / safe_lum
+    g_ratio = g / safe_lum
+    b_ratio = b / safe_lum
 
-    max_val = star_data.max()
+    def make_channel(ratio):
+        ch = np.where(mask, cleaned * ratio, 0.0)
+        if glow_sigma > 0:
+            ch = gaussian_filter(ch, sigma=glow_sigma)
+        return ch
+
+    rc, gc, bc = make_channel(r_ratio), make_channel(g_ratio), make_channel(b_ratio)
+    rgb_stack  = np.stack([rc, gc, bc], axis=-1)
+
+    # Normalise brightness via luminance (same as original pipeline)
+    ch_lum  = 0.299 * rc + 0.587 * gc + 0.114 * bc
+    max_val = ch_lum.max()
     if max_val > 0:
-        star_data = np.clip(star_data * (255.0 / max_val) * stretch, 0, 255)
+        rgb_stack = np.clip(rgb_stack * (255.0 / max_val) * stretch, 0, 255)
+    rgb_stack = np.clip(rgb_stack + bg_lift, 0, 255)
 
-    return np.clip(star_data + bg_lift, 0, 255).astype(np.uint8)
+    # Saturation boost: push colour away from grey
+    grey    = (0.299 * rgb_stack[:,:,0]
+             + 0.587 * rgb_stack[:,:,1]
+             + 0.114 * rgb_stack[:,:,2])[:,:,np.newaxis]
+    boosted = grey + sat_boost * (rgb_stack - grey)
+    boosted = np.clip(boosted, 0, 255).astype(np.uint8)
+
+    return boosted
 
 
 def process(input_path:   str,
@@ -250,7 +300,8 @@ def process(input_path:   str,
             color_cv:     float = DEFAULT_COLOR_CV,
             glow_sigma:   float = DEFAULT_GLOW_SIGMA,
             stretch:      float = DEFAULT_STRETCH,
-            bg_lift:      int   = DEFAULT_BG_LIFT) -> str:
+            bg_lift:      int   = DEFAULT_BG_LIFT,
+            sat_boost:    float = DEFAULT_SAT_BOOST) -> str:
 
     input_path  = Path(input_path)
     output_path = input_path.with_name(input_path.stem + "_astroprep.png")
@@ -291,14 +342,14 @@ def process(input_path:   str,
     r, g, b = data[:,:,0], data[:,:,1], data[:,:,2]
     mask = extract_stars(cleaned, (r, g, b),
                          threshold, min_blob, max_blob, max_compact, color_cv)
-    final   = render_output(cleaned, mask, glow_sigma, stretch, bg_lift)
+    final   = render_output(cleaned, mask, (r, g, b), glow_sigma, stretch, bg_lift, sat_boost)
 
-    _, n_est = label(final > 40)
+    _, n_est = label(final[:,:,0] > 40)
     print(f"  [output] Estimated astrometry detections: ~{n_est}")
     print(f"  [output] Saved: {output_path.name}")
     print(f"{'='*57}\n")
 
-    Image.fromarray(final, mode="L").convert("RGB").save(str(output_path), format="PNG")
+    Image.fromarray(final, mode="RGB").save(str(output_path), format="PNG")
     return str(output_path)
 
 
@@ -339,6 +390,9 @@ Tuning tips:
         help=f"Brightness stretch multiplier (default: {DEFAULT_STRETCH})")
     parser.add_argument("--bg-lift",      type=int,   default=DEFAULT_BG_LIFT,
         help=f"Output background grey level (default: {DEFAULT_BG_LIFT})")
+    parser.add_argument("--sat-boost",    type=float, default=DEFAULT_SAT_BOOST,
+        help=f"Saturation multiplier for star colours (default: {DEFAULT_SAT_BOOST}). "
+             "1.0 = natural, 3-4 = vivid. Use with --color-cv 1.0.")
 
     args = parser.parse_args()
 
@@ -355,6 +409,7 @@ Tuning tips:
         glow_sigma  = args.glow_sigma,
         stretch     = args.stretch,
         bg_lift     = args.bg_lift,
+        sat_boost   = args.sat_boost,
     )
 
 

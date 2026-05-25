@@ -17,6 +17,7 @@ const SLIDERS = [
   { id: 'glowSigma',  min: 0,   max: 5,    step: 0.1,  digits: 1, default: 1.5 },
   { id: 'stretch',    min: 0.5, max: 10,   step: 0.1,  digits: 1, default: 3.0 },
   { id: 'bgLift',     min: 0,   max: 50,   step: 1,    digits: 0, default: 12 },
+  { id: 'satBoost',   min: 0,   max: 5,    step: 0.1,  digits: 1, default: 2.5 },
 ];
 
 const state = {

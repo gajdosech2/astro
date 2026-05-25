@@ -2,9 +2,11 @@
 
 A browser-based preprocessor for afocal phone astrophotos, used as a front end for [nova.astrometry.net](https://nova.astrometry.net) plate solving. Tuned for iPhone 12 Pro shots through a Dobsonian eyepiece — the workflow is to point, snap, then drop the JPEG into this tool to extract a clean star field for the astrometry source extractor.
 
+Now supports **color rendering** for visually pleasing results while maintaining plate-solving performance.
+
 All processing runs **entirely client-side** in a Web Worker. There is no backend; photos never leave the device. The repository is a static site — push to GitHub, hook up Vercel, and it deploys with zero configuration.
 
-A reference implementation in Python (`astro_preprocess.py`) lives alongside the web app for batch processing on a workstation. Both implementations are kept in sync and produce equivalent results.
+A reference implementation in Python (`astro_preprocess_color.py`) lives alongside the web app for batch processing on a workstation. Both implementations are kept in sync and produce equivalent results.
 
 ---
 
@@ -80,7 +82,13 @@ Threshold the cleaned image at `threshold` DN (default 20) and run **connected c
 
 ### 7. Render
 
-Take the cleaned luminance under the accepted-star mask, apply a small Gaussian blur (`glow_sigma`, default 1.5 px), normalize the brightest pixel to 255, multiply by `stretch` (default 3.0), then add `bg_lift` (default 12 DN) so the background isn't pure black.
+Confirmed stars are rendered as smooth Gaussian profiles. In color mode (default):
+1. **Color Ratios:** Per-pixel RGB ratios are computed from the raw image to capture the star's natural tint without the sky background.
+2. **Profile Rendering:** The background-subtracted luminance is multiplied by these ratios to tint the smooth star profile.
+3. **Glow:** A small Gaussian blur (`glow_sigma`, default 1.5 px) is applied to each channel.
+4. **Normalisation & Stretch:** The image is normalised by peak luminance and multiplied by `stretch` (default 3.0).
+5. **Saturation Boost:** The `satBoost` parameter (default 2.5) pushes the colors away from grey to amplify the natural star color (blue giants, red dwarfs).
+6. **Background Lift:** `bg_lift` (default 12 DN) is added so the background isn't pure black, helping astrometry's source extractor.
 
 ## Parameters
 
@@ -97,6 +105,7 @@ Take the cleaned luminance under the accepted-star mask, apply a small Gaussian 
 | `glow_sigma` | 1.5 | Gaussian sigma for star profile rendering. |
 | `stretch` | 3.0× | Brightness multiplier after normalisation. |
 | `bg_lift` | 12 | Output background grey level. |
+| `satBoost` | 2.5 | Saturation multiplier (0 = greyscale, 1 = natural). |
 
 ## App architecture
 
@@ -144,13 +153,25 @@ Vercel serves static sites at no cost on the hobby tier.
 3. Pick "Other" or "No Framework" — the defaults work fine.
 4. Click **Deploy**.
 
-## Python reference script
+## Python reference scripts
 
-`astro_preprocess.py` is the original CLI implementation. Run it with:
+`astro_preprocess_color.py` is the primary CLI implementation with color support. `astro_preprocess.py` is the original greyscale version.
+
+To set up the Python environment:
 
 ```bash
+# Create a virtual environment
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate  # On macOS/Linux
+# .venv\Scripts\activate   # On Windows
+
+# Install dependencies
 pip install pillow numpy scipy
-python astro_preprocess.py my_image.jpg
+
+# Run the script
+python astro_preprocess_color.py samples/input4.jpeg --crop 0 --max-compact 20.0
 ```
 
 ## Repository layout

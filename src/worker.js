@@ -99,20 +99,23 @@ function run(rgba, w, h, p) {
 
   // ── Render output ────────────────────────────────────────────────────
   progress('render', 0);
-  const out = renderOutput(cleaned, mask, w, h, p);
+  const out = renderOutput(cleaned, mask, r, g, b, w, h, p);
 
-  // Estimate astrometry detections (blobs > 40 in output)
+  // Estimate astrometry detections (blobs > 40 in output luminance)
   const binary = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) binary[i] = out[i] > 40 ? 1 : 0;
+  for (let i = 0; i < w * h; i++) {
+    const lumOut = 0.299 * out[i * 3] + 0.587 * out[i * 3 + 1] + 0.114 * out[i * 3 + 2];
+    binary[i] = lumOut > 40 ? 1 : 0;
+  }
   const { count: estDetections } = labelComponents(binary, w, h);
   log(`[output] Estimated astrometry detections: ~${estDetections}`);
 
   // Pack into RGBA for transfer
   const outRgba = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0, j = 0; i < out.length; i++, j += 4) {
-    outRgba[j] = out[i];
-    outRgba[j + 1] = out[i];
-    outRgba[j + 2] = out[i];
+  for (let i = 0, j = 0; i < w * h; i++, j += 4) {
+    outRgba[j]     = out[i * 3];
+    outRgba[j + 1] = out[i * 3 + 1];
+    outRgba[j + 2] = out[i * 3 + 2];
     outRgba[j + 3] = 255;
   }
   return { rgba: outRgba, width: w, height: h, estDetections };
@@ -468,35 +471,66 @@ function extractStars(cleaned, r, g, b, w, h, p) {
 /* ─────────────────────────────────────────────────────────────────────
  * Render output: mask × cleaned, gaussian glow, normalize, stretch, lift
  * ──────────────────────────────────────────────────────────────────── */
-function renderOutput(cleaned, mask, w, h, p) {
+function renderOutput(cleaned, mask, r, g, b, w, h, p) {
   const N = w * h;
-  let star = new Float32Array(N);
-  for (let i = 0; i < N; i++) star[i] = mask[i] ? cleaned[i] : 0;
+  const lumSrc = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    lumSrc[i] = 0.299 * r[i] + 0.587 * g[i] + 0.114 * b[i];
+  }
 
-  if (p.glowSigma > 0) star = gaussianFilter1Dx2(star, w, h, p.glowSigma);
+  // Per-pixel colour ratios
+  const rRatio = new Float32Array(N);
+  const gRatio = new Float32Array(N);
+  const bRatio = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const safeLum = lumSrc[i] > 0 ? lumSrc[i] : 1.0;
+    rRatio[i] = r[i] / safeLum;
+    gRatio[i] = g[i] / safeLum;
+    bRatio[i] = b[i] / safeLum;
+  }
 
-  // Normalize to 255 then apply stretch
+  function makeChannel(ratio) {
+    let ch = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      ch[i] = mask[i] ? cleaned[i] * ratio[i] : 0;
+    }
+    if (p.glowSigma > 0) {
+      ch = gaussianFilter1Dx2(ch, w, h, p.glowSigma);
+    }
+    return ch;
+  }
+
+  const rc = makeChannel(rRatio);
+  const gc = makeChannel(gRatio);
+  const bc = makeChannel(bRatio);
+
+  // Normalise brightness via luminance
+  const chLum = new Float32Array(N);
   let maxV = 0;
-  for (let i = 0; i < N; i++) if (star[i] > maxV) maxV = star[i];
+  for (let i = 0; i < N; i++) {
+    chLum[i] = 0.299 * rc[i] + 0.587 * gc[i] + 0.114 * bc[i];
+    if (chLum[i] > maxV) maxV = chLum[i];
+  }
 
-  const out = new Uint8Array(N);
-  if (maxV > 0) {
-    const scale = (255 / maxV) * p.stretch;
-    for (let i = 0; i < N; i++) {
-      let v = star[i] * scale;
-      if (v > 255) v = 255;
-      v += p.bgLift;
-      if (v < 0) v = 0;
-      if (v > 255) v = 255;
-      out[i] = v;
-    }
-  } else {
-    for (let i = 0; i < N; i++) {
-      let v = p.bgLift;
-      if (v < 0) v = 0;
-      if (v > 255) v = 255;
-      out[i] = v;
-    }
+  const out = new Uint8Array(N * 3);
+  const scale = maxV > 0 ? (255 / maxV) * p.stretch : 0;
+
+  for (let i = 0; i < N; i++) {
+    // 1. Initial RGB with stretch and lift
+    let rr = rc[i] * scale + p.bgLift;
+    let gg = gc[i] * scale + p.bgLift;
+    let bb = bc[i] * scale + p.bgLift;
+
+    // 2. Saturation boost
+    const grey = 0.299 * rr + 0.587 * gg + 0.114 * bb;
+    rr = grey + p.satBoost * (rr - grey);
+    gg = grey + p.satBoost * (gg - grey);
+    bb = grey + p.satBoost * (bb - grey);
+
+    // 3. Clamp and store
+    out[i * 3]     = Math.max(0, Math.min(255, rr));
+    out[i * 3 + 1] = Math.max(0, Math.min(255, gg));
+    out[i * 3 + 2] = Math.max(0, Math.min(255, bb));
   }
 
   return out;
